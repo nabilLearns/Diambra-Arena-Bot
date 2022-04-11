@@ -1,8 +1,34 @@
 from matplotlib import pyplot as plt
+import numpy as np
 import torch
 import torch.nn as nn
+import torch.optim as optim
 import math
 import cv2 
+
+import diambraArena
+import argparse
+from diambraArena.gymUtils import showGymObs
+
+"""
+settings = {}
+settings["romsPath"] = "/home/nabil/Downloads/"
+settings["gameId"] = "doapp"
+#settings["actionSpace"] = "discrete"
+#settings["attackButCombination"] = False # reduce action space size
+
+envId = "TestEnv"
+env = diambraArena.make(envId, settings)
+print("initial obs")
+init_observation = env.reset()
+showGymObs(init_observation, env.charNames)
+
+print(env.action_space)
+
+global REPLAY_MEMORY
+REPLAY_MEMORY = []
+"""
+
 
 '''
 Q = Our net's output
@@ -18,87 +44,33 @@ D = replay buffer
 # preprocessing
 # need to rescale image, generate
 
-'''
-
-
-Moves (0-8): (No-Move, Left, Left+Up, Up, Up+Right, Right, Right+Down, Down, Down+Left) 
-Attacks (0-3): (No-Attack, Hold, Punch, Kick)
-
-
-EXAMPLE INPUT:
-actions = env.action_space
-observation, reward, done, info = env.step(actions)
-observation['frame'] = frame array shape = (480, 512, 3)
-observation['P1'] = {'oppChar1': 4, 'ownChar1': 8, 'oppChar': 4, 'ownChar': 8, 'oppHealth': 143, 'ownHealth': 187, 'oppSide': 0, 'ownSide': 1, 'oppWins': 1, 'ownWins': 0, 'actions': {'move': 5, 'attack': 7}}
-observation['stage'] = 1
-
-
-info = {'roundDone': False, 'stageDone': False, 'gameDone': False, 'epDone': False}
-Info: {'roundDone': False, 'stageDone': False, 'gameDone': False, 'epDone': False}
-observation["frame"].shape: (480, 512, 3)
-observation["stage"]: 1
-observation["P1"]["ownChar1"]: Kasumi
-observation["P1"]["oppChar1"]: Bass
-observation["P1"]["ownChar"]: Kasumi
-observation["P1"]["oppChar"]: Bass
-observation["P1"]["ownHealth"]: 84
-observation["P1"]["oppHealth"]: 23
-observation["P1"]["ownSide"]: 1
-observation["P1"]["oppSide"]: 1
-observation["P1"]["ownWins"]: 0
-observation["P1"]["oppWins"]: 0
-observation["P1"]["actions"]: {'move': 6, 'attack': 0}
-Reward: 0.9423076923076923
-
-Done: False
-'''
-
-
-#In: 6 of (480, 512, 3)
-#To net: (6, 1, 256, 256)
-#Out of imagenet: (6, hidden_size)
-#Out of timenet: (hidden_size2)
-#Out of metanet: (hidden_size3)
-#Out of final net: one-val
-#One-val//8 = move, One-vack
-
-"""
-# GREYSCALE
-img = cv2.imread('sample_out_2.png')
-small = cv2.resize(img, (256,256)) 
-img_gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-print(img_gray.shape)
-plt.imshow(img_gray)
-plt.show()
-"""
-
-    
 # Image - Network
 class ImageNetwork(nn.Module):
-    def init(self, hidden_size):
-        super(ImageNetwork, self).init()
+    def __init__(self, hidden_size):
+        super(ImageNetwork, self).__init__()
         self.conv = nn.Sequential(
             nn.Conv2d(1, 4, kernel_size=8, stride=4),
             nn.ReLU(),
             nn.Conv2d(4, 8, kernel_size=5, stride=3),
             nn.ReLU(),
-            nn.Conv2d(8, 8, kernel_size=3, stride=1),
+            nn.Conv2d(8, 16, kernel_size=3, stride=1),
             nn.ReLU(),
             nn.Flatten(start_dim=1)
         )
 
         self.fc = nn.Sequential(
-            nn.Linear(2592, 512),
+            nn.Linear(784, 512),
             nn.ReLU(),
             nn.Linear(512, hidden_size)
         )
 
     def forward(self, in_vals):
-        print(in_vals.shape)
+        #print(in_vals.shape)
         out = self.conv(in_vals)
         out = self.fc(out)
         return out 
-      
+        
+        
 class TimeLSTM(nn.Module):
     def __init__(self, input_shape, output_shape, hidden_size, num_layers):
         super(TimeLSTM, self).__init__()
@@ -113,52 +85,56 @@ class TimeLSTM(nn.Module):
         self.ac2 = nn.ReLU()
 
     def forward(self, in_vals):
+        in_vals = in_vals.reshape(in_vals.shape[0], 1, in_vals.shape[1])
         out, (h_n, c_n) = self.LSTM(in_vals)
-        output = h_n[-1,:]
+        #print(h_n.shape)
+        output = h_n[-1,:,:]
+        output = output.reshape(output.shape[1])
         output = self.ac1(output)
         output = self.FC(output)
         output = self.ac2(output)
         return output
-      
-      
+
+        
 class metaData(nn.Module):
-    def __init__(self, input_shape, hidden_sz, n_outputs):
+    def __init__(self, hidden_sz, n_outputs):
         """
         input_shape = 12
         """
         super(metaData, self).__init__()
         self.linear_relu_stack = nn.Sequential(
-            nn.Linear(input_shape[0], hidden_sz),
+            nn.Linear(20, hidden_sz),
             nn.ReLU(),
             nn.Linear(hidden_sz, hidden_sz) ,
             nn.ReLU(),
             nn.Linear(hidden_sz, n_outputs)
         )
-     
-    def forward(self, input):
-        return self.linear_relu_stack(input)  
-        
-#observation['P1'] = {'oppChar1': 4, 'ownChar1': 8, 'oppChar': 4, 'ownChar': 8, 'oppHealth': 143, 'ownHealth': 187, 'oppSide': 0, 'ownSide': 1, 'oppWins': 1, 'ownWins': 0, 'actions': {'move': 5, 'attack': 7}}
-#observation['stage'] = 1
+
+    def forward(self, inp):
+        return self.linear_relu_stack(inp)
         
 class finalNetwork(nn.Module):
-    def __init__(self, input_shape, hidden_sz, n_actions=72):
+    def __init__(self, c_in, hidden_sz, n_actions=72):
         super(finalNetwork, self).__init__()
         self.dense_network = nn.Sequential(
-            nn.Linear(input_shape[0], hidden_sz),
+            nn.Linear(c_in, hidden_sz),
             nn.ReLU(),
             nn.Linear(hidden_sz, n_actions)
         )
             
-    def forward(self, input):
-        return self.dense_network(input)
+    def forward(self, inp):
+        return self.dense_network(inp)
         
-    def predict(self, input):  
-        return self.forward(input).argmax() 
-      
+    def predict(self, inp):  
+        out = self.forward(inp)
+        top_k, top_k_idxs = torch.topk(out, k=10)
+        top_k, tok_k_idxs = top_k.detach().numpy(), top_k_idxs.detach().numpy()
+        action = np.random.choice(top_k_idxs, p= top_k/ top_k.sum())
+        return action#self.forward(inp).argmax() 
+"""   
 def preprocess(observation, past_5_frames):
-    """given an observation and past 5 frames give us the preprocessed input"""
-
+    '''given an observation and past 5 frames give us the preprocessed input'''
+    past_5_frames = torch.cat(past_5_frames)
     current_frame = observation['frame']
     metaData = observation['P1']
     actions = metaData['actions']
@@ -174,33 +150,49 @@ def preprocess(observation, past_5_frames):
     output = {'frames': frames, 'meta': meta}
 
     return output
-  
+"""    
+def preprocess(observation, past_5_frames):
+    """given an observation and past 5 frames give us the preprocessed input"""
+    past_5_fr = []
+    for frame in past_5_frames:
+        current_frame = observation['frame']
+        small = cv2.resize(current_frame, (128, 128)) 
+        img_gray = cv2.cvtColor(np.float32(small), cv2.COLOR_RGB2GRAY)[None, :][None, :] # shape 1 by 1 by 256 by 256
+        past_5_fr.append(torch.tensor(img_gray))
+    past_5_frames = torch.cat(past_5_fr)
+    current_frame = observation['frame']
+    metaData = observation['P1']
+    actions = metaData['actions']
+    small = cv2.resize(current_frame, (128, 128)) 
+    img_gray = cv2.cvtColor(np.float32(small), cv2.COLOR_RGB2GRAY)[None, :][None, :] # shape 1 by 1 by 256 by 256
+    img_gray = torch.tensor(img_gray)
+    frames = torch.row_stack((past_5_frames, img_gray))
+
+    meta = torch.zeros(20)
+    meta[:3] = torch.tensor([metaData['ownSide'], metaData['ownHealth'], metaData['oppHealth']])
+    meta[2 + actions['move']] = 1
+    meta[11 + actions['attack']] = 1
+    output = {'frames': frames, 'meta': meta}
+
+    return output
+    
 # DQN Algorithm
 
-REPLAY_MEMORY = []
-learning_rate = 0.0001
-imagenet = ImageNetwork(64)
-timenet = TimeLSTM(64, 16, 32, 1)
-metanet = metaData(20, 32, 16)
-finalnet = finalNetwork(32, 64, 72)
-optimizer = optim.Adam(list(imagenet.parameters()) + list(timenet.parameters()) + list(metanet.parameters()) + list(finalnet.parameters()), learning_rate)
-num_sample = 16
-discount_rate = 0.9
-rolling_frames = []
-
-def SELECT_ACTION(epsilon, input):
+def SELECT_ACTION(epsilon, inp):
     """Selects random action w/ prob epsilon, otherwise picks the action of highest value from the Q-Network"""
     
     action_type = np.random.choice([0, 1], p=[epsilon, 1-epsilon])
-    if action_type == 0 or not(input):
+    if action_type == 0 or not(inp):
+        print("DOING RANDOM")
         action = env.action_space.sample()
     else:
-        frameout1 = imagenet(input['frames'])
+        frameout1 = imagenet(inp['frames'])
         frameout = timenet(frameout1)
-        metaout = metanet(input['meta'])
+        metaout = metanet(inp['meta'])
         concat_data = torch.cat((frameout, metaout))
         action = finalnet.predict(concat_data)   #f (observation)   # select best action from output of Q net-work
-        action = {'move': action//8, 'attack': action%8}
+        action = np.array([action.item()//8, action.item()%8])
+        #action = {'move': action//8, 'attack': action%8}
     return action
 
 def LOSS(y, Q):
@@ -209,8 +201,8 @@ def LOSS(y, Q):
 def TRAIN_STEP():
     inds = np.random.choice(len(REPLAY_MEMORY), num_sample, replace=False)
     replay_vals = [REPLAY_MEMORY[ind] for ind in inds]
-    y_js = torch.zeros(num_sample, requires_grad=True)
-    Q_js = torch.zeros(num_sample, requires_grad=True)
+    y_js = torch.zeros(num_sample)
+    Q_js = torch.zeros(num_sample)
     optimizer.zero_grad()
     for i in range(len(replay_vals)):
         if (replay_vals[i][4]):
@@ -225,13 +217,24 @@ def TRAIN_STEP():
         frameout = timenet(frameout1)
         metaout = metanet(replay_vals[i][0]['meta'])
         concat_data = torch.cat((frameout, metaout))
-        ind = replay_vals[i][1]['move']*8 + replay_vals[i][1]['attack']
+        ind = replay_vals[i][1][0]*8 + replay_vals[i][1][1]
         Q_js[i] = finalnet(concat_data)[ind]
     myloss = LOSS(y_js, Q_js)
     myloss.backward()
     optimizer.step()
+    print(finalnet.parameters())
+    
+learning_rate = 0.01
+imagenet = ImageNetwork(64)
+timenet = TimeLSTM(64, 16, 32, 1)
+metanet = metaData(32, 16)
+finalnet = finalNetwork(32, 64, 72)
+optimizer = optim.Adam(list(imagenet.parameters()) + list(timenet.parameters()) + list(metanet.parameters()) + list(finalnet.parameters()), learning_rate)
+num_sample = 32
+discount_rate = 0.9
+rolling_frames = []
 
-def RUN_DQN_ALGORITHM(num_episodes, num_time_steps, eps=1, min_eps=0.05):
+def RUN_DQN_ALGORITHM(REPLAY_MEMORY, num_episodes, num_time_steps, eps=1, min_eps=0.05):
     """
     Runs through DQN algo. as described in https://www.cs.toronto.edu/~vmnih/docs/dqn.pdf
 
@@ -240,19 +243,40 @@ def RUN_DQN_ALGORITHM(num_episodes, num_time_steps, eps=1, min_eps=0.05):
     eps (float): probability of selecting a random action. this can decay as the learning process progresses (i.e. do more exploration initially, then less later on) 
     """
 
+    #print("REPLAY MEM C1:", REPLAY_MEMORY.shape)
     for episode in range(num_episodes):
-        observation = env.reset()
+        print("REPLAY MEM", len(REPLAY_MEMORY))
+
+        #print(f"STARTING NEW EPISODE {episode}")
+        if episode != 0:
+            observation = env.reset()
+        else:
+            observation = init_observation
         rolling_frames = []
         phi_t = None
+        
+        step = 0
         while True:
+            step += 1
+            print(f"step: {step}, eps: {eps}")
+            
+            if step % 50 == 0:
+                print("OBSERVATION", observation)
+        
             if (len(rolling_frames) == 5):
                 phi_t = preprocess(observation, rolling_frames)
-            eps = max(eps*0.99, min_eps)
+            eps = max(eps*0.995, min_eps)
             action = SELECT_ACTION(eps, phi_t)
+            
+            print("ACTION: ", action, type(action))
+            
             rolling_frames.append(observation['frame'])
             if (len(rolling_frames) == 6):
                 rolling_frames = rolling_frames[1:]
+                
+            #print("step")
             observation, reward, done, info = env.step(action)
+            
             if (info['roundDone']):
                 rolling_frames = []
                 phi_t = None
@@ -260,13 +284,36 @@ def RUN_DQN_ALGORITHM(num_episodes, num_time_steps, eps=1, min_eps=0.05):
                 phi_tplus1 = preprocess(observation, rolling_frames)
                 newtuple = (phi_t, action, reward, phi_tplus1, info['roundDone'])
                 REPLAY_MEMORY.append(newtuple)
-                if (len(REPLAY_MEMORY) == 101):
+                if (len(REPLAY_MEMORY) == 501):
                     REPLAY_MEMORY = REPLAY_MEMORY[1:]
             if (info['gameDone']):
+
                 break
-            if (len(REPLAY_MEMORY)>20):
+            if (len(REPLAY_MEMORY)>50):
                 TRAIN_STEP()
+
             # store transition in REPLAY_MEMORY
             # sample random minibatch of transitions from REPLAY_MEMORY
             # set target value y_i according to eqn in paper
             # perform grad. desc. on LOSS(y_i, Q_value)
+
+if __name__ == '__main__':
+    global REPLAY_MEMORY
+    REPLAY_MEMORY = []
+    
+    settings = {}
+    settings["romsPath"] = "/home/nabil/Downloads/"
+    settings["gameId"] = "doapp"
+    settings["characters"] = [["Bayman"], ["Gen-Fu"]]
+#settings["actionSpace"] = "discrete"
+#settings["attackButCombination"] = False # reduce action space size
+
+    envId = "TestEnv"
+    env = diambraArena.make(envId, settings)
+    print("initial obs")
+    init_observation = env.reset()
+    showGymObs(init_observation, env.charNames)
+
+    print(env.action_space)
+
+    RUN_DQN_ALGORITHM(REPLAY_MEMORY, num_episodes=10, num_time_steps=100, eps=0.8, min_eps=0.05)
