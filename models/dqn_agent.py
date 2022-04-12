@@ -25,7 +25,7 @@ showGymObs(init_observation, env.charNames)
 
 print(env.action_space)
 
-global REPLAY_MEMORY
+#global REPLAY_MEMORY
 REPLAY_MEMORY = []
 """
 
@@ -205,7 +205,7 @@ def TRAIN_STEP():
     Q_js = torch.zeros(num_sample)
     optimizer.zero_grad()
     for i in range(len(replay_vals)):
-        if (replay_vals[i][4]):
+        if not (replay_vals[i][4]):
             frameout1 = imagenet(replay_vals[i][3]['frames'])
             frameout = timenet(frameout1)
             metaout = metanet(replay_vals[i][3]['meta'])
@@ -271,6 +271,7 @@ def RUN_DQN_ALGORITHM(REPLAY_MEMORY, num_episodes, num_time_steps, eps=1, min_ep
             print("ACTION: ", action, type(action))
             
             rolling_frames.append(observation['frame'])
+            
             if (len(rolling_frames) == 6):
                 rolling_frames = rolling_frames[1:]
                 
@@ -305,15 +306,16 @@ if __name__ == '__main__':
     settings["romsPath"] = "/home/nabil/Downloads/"
     settings["gameId"] = "doapp"
     settings["characters"] = [["Bayman"], ["Gen-Fu"]]
-#settings["actionSpace"] = "discrete"
-#settings["attackButCombination"] = False # reduce action space size
+
+    ##settings["actionSpace"] = "discrete"
+    ##settings["attackButCombination"] = False # reduce action space size
 
     envId = "TestEnv"
     env = diambraArena.make(envId, settings)
-    print("initial obs")
+    ##print("initial obs")
     init_observation = env.reset()
     showGymObs(init_observation, env.charNames)
 
     print(env.action_space)
 
-    RUN_DQN_ALGORITHM(REPLAY_MEMORY, num_episodes=10, num_time_steps=100, eps=0.8, min_eps=0.05)
+RUN_DQN_ALGORITHM(REPLAY_MEMORY, num_episodes=10, num_time_steps=100, eps=0.8, min_eps=0.05)
