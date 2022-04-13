@@ -113,7 +113,7 @@ class finalNetwork(nn.Module):
         return action#self.forward(inp).argmax() 
 
 def preprocess(observation, past_5_frames):
-    """given an observation and past 5 frames give us the preprocessed input"""
+    """given an obser	vation and past 5 frames give us the preprocessed input"""
     past_5_fr = []
     for frame in past_5_frames:
         current_frame = observation['frame']
@@ -144,8 +144,8 @@ def SELECT_ACTION(epsilon, inp):
     
     action_type = np.random.choice([0, 1], p=[epsilon, 1-epsilon])
     if action_type == 0 or not(inp):
-        print("DOING RANDOM")
-        action = env.action_space.sample()
+        #print("DOING RANDOM")
+        action = env.action_space.sample()["P1"]
     else:
         frameout1 = imagenet(inp['frames'])
         frameout = timenet(frameout1)
@@ -199,6 +199,10 @@ def RUN_DQN_ALGORITHM(num_episodes, num_time_steps, eps=1, min_eps=0.05):
     """
     Runs through DQN algo. as described in https://www.cs.toronto.edu/~vmnih/docs/dqn.pdf
     
+    Returns
+    -------
+    cumulative_reward (list): list of cumulative rewards earned in every round of training 
+    
     Parameters
     ----------
     eps (float): probability of selecting a random action. this can decay as the learning process progresses (i.e. do more exploration initially, then less later on) 
@@ -208,8 +212,9 @@ def RUN_DQN_ALGORITHM(num_episodes, num_time_steps, eps=1, min_eps=0.05):
     phi_t (dict): Stores processed observations in the form {'frames': framedata, 'meta': metadata}
     """
     REPLAY_MEMORY = []
+    all_cumulative_rewards = []
     for episode in range(num_episodes):
-        print("REPLAY MEM", len(REPLAY_MEMORY))
+        #print("REPLAY MEM", len(REPLAY_MEMORY))
 
         if episode != 0:
             observation = env.reset()
@@ -217,36 +222,37 @@ def RUN_DQN_ALGORITHM(num_episodes, num_time_steps, eps=1, min_eps=0.05):
             observation = init_observation
         rolling_frames = []
         cumulative_reward = [0]
-        #round_rewards
         currRound = 0
         phi_t = None
         steps = 0
         
         while True:
             steps += 1
-            print(f"step: {steps}, eps: {eps}")
+            #print(f"step: {steps}, eps: {eps}")
             
             #if steps % 50 == 0:
             #    print(f"OBSERVATION: {observation}")
             if (len(rolling_frames) == 5):
                 phi_t = preprocess(observation, rolling_frames)
-                
+                            
             eps = max(eps*0.995, min_eps)
             action = SELECT_ACTION(eps, phi_t)
-            print("ACTION: ", action, type(action))
+            #print("ACTION: ", action, type(action))
+            actions = np.append(action, env.action_space.sample()["P2"])
             
             rolling_frames.append(observation['frame'])
             if (len(rolling_frames) == 6):
                 rolling_frames = rolling_frames[1:]
-            
-            observation, reward, done, info = env.step(action)
+
+            observation, reward, done, info = env.step(actions)
             cumulative_reward[currRound] += reward
-            #round_rewards += reward
             
             if (info['roundDone']):
                 rolling_frames = []
-                print(f"Cumulative Round Reward {cumulative_reward[curr_round]}, Average Reward per Step: {cumulative_reward[currRound]/steps}")
+                print(f"Cumulative Round Reward {cumulative_reward[currRound]}, Average Reward per Step: {cumulative_reward[currRound]/steps}")
+                cumulative_reward[currRound] = np.array(cumulative_reward[currRound])
                 currRound += 1
+                cumulative_reward.append(0)
                 phi_t = None
             if (phi_t != None):
                 phi_tplus1 = preprocess(observation, rolling_frames)
@@ -255,21 +261,26 @@ def RUN_DQN_ALGORITHM(num_episodes, num_time_steps, eps=1, min_eps=0.05):
                 if (len(REPLAY_MEMORY) == 501):
                     REPLAY_MEMORY = REPLAY_MEMORY[1:]
             if (info['gameDone']):
+                all_cumulative_rewards.append(cumulative_reward)
+                print(f"EPISODE {episode} DONE")
+                print(cumulative_reward)
                 break
             if (len(REPLAY_MEMORY)>50):
                 TRAIN_STEP(REPLAY_MEMORY)
             #if steps == 100:
             #    break
     
+    
     saved_models_fldr = os.path.join(os.getcwd(), 'saved_models')
     models_path = os.path.join(saved_models_fldr, f'{steps}')
     if not os.path.isdir(saved_models_fldr):
         os.mkdir(saved_models_fldr)
+    if not os.path.isdir(models_path):
         os.mkdir(models_path)
-    torch.save(imagenet, os.path.join(models_path, f"imagenet {steps}"))            
-    torch.save(timenet, os.path.join(models_path, f"timenet {steps}"))            
-    torch.save(metanet, os.path.join(models_path, f"metanet {steps}"))            
-    torch.save(finalnet, os.path.join(models_path, f"finalnet {steps}"))            
+    torch.save(imagenet, os.path.join(models_path, f"imagenet_{steps}"))            
+    torch.save(timenet, os.path.join(models_path, f"timenet_{steps}"))            
+    torch.save(metanet, os.path.join(models_path, f"metanet_{steps}"))            
+    torch.save(finalnet, os.path.join(models_path, f"finalnet_{steps}"))       
     return cumulative_reward
     
 if __name__ == '__main__':
@@ -279,7 +290,8 @@ if __name__ == '__main__':
     settings = {}
     settings["romsPath"] = "/home/nabil/Downloads/"
     settings["gameId"] = "doapp"
-    settings["characters"] = [["Bayman"], ["Gen-Fu"]]
+    settings["characters"] = [["Zack"], ["Gen-Fu"]]
+    settings["player"] = "P1P2"
     #settings["actionSpace"] = "discrete"
     #settings["attackButCombination"] = False # reduce action space size
 
@@ -290,8 +302,9 @@ if __name__ == '__main__':
     #showGymObs(init_observation, env.charNames) this brings up annoying black screen
     print(env.action_space)
 
-    cumulative_reward = RUN_DQN_ALGORITHM(num_episodes=1, num_time_steps=100, eps=0.8, min_eps=0.05)
+    cumulative_reward = RUN_DQN_ALGORITHM(num_episodes=10, num_time_steps=10, eps=0.8, min_eps=0.05)
     print(f"CUMULATIVE REWARD {cumulative_reward}")
     results_file = open("dqn_results.txt", "w")
-    results_file.write(f"CUMULATIVE REWARD LIST {cumulative_reward} \n AVG CUMULATIVE REWARD PER ROUND {np.array(cumulative_reward).sum()/len(cumulative_reward)}")
+    results_file.write(f"CUMULATIVE REWARD LIST {cumulative_reward} \n AVG CUMULATIVE REWARD PER ROUND {sum(cumulative_reward)/len(cumulative_reward)} \n # Rounds: {len(cumulative_reward)}")
+    results_file.close()
     results_file.close()
