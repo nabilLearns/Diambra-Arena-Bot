@@ -1,6 +1,6 @@
 # RL Agent Plays Dead or Alive ++
-ECE324 Course Project
-Code for the Deep Q Learning Model can be found in the test_agent.py and custom_dqn files. PPO_template.ipynb contains the PPO RL model.
+ECE324 Course Project <br>
+Code for the Deep Q Learning Model can be found in dqn_agent.py. PPO_template.ipynb contains the PPO RL model.
 
 ## Setup
 ```
