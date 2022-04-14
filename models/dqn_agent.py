@@ -94,7 +94,7 @@ class metaData(nn.Module):
         return self.linear_relu_stack(inp)
         
 class finalNetwork(nn.Module):
-    def __init__(self, c_in, hidden_sz, n_actions=72):
+    def __init__(self, c_in, hidden_sz, n_actions, using_discrete=False):
         super(finalNetwork, self).__init__()
         self.dense_network = nn.Sequential(
             nn.Linear(c_in, hidden_sz),
@@ -107,7 +107,7 @@ class finalNetwork(nn.Module):
         
     def predict(self, inp):  
         out = self.forward(inp)
-        top_k, top_k_idxs = torch.topk(out, k=10)
+        top_k, top_k_idxs = torch.topk(out, k=10 if not using_discrete else 2)
         top_k, tok_k_idxs = top_k.detach().numpy(), top_k_idxs.detach().numpy()
         action = np.random.choice(top_k_idxs, p= top_k/ top_k.sum())
         return action#self.forward(inp).argmax() 
@@ -139,27 +139,27 @@ def preprocess(observation, past_5_frames):
     
 # DQN Algorithm
 
-def SELECT_ACTION(epsilon, inp):
+def SELECT_ACTION(epsilon, inp, using_discrete = False):
     """Selects random action w/ prob epsilon, otherwise picks the action of highest value from the Q-Network"""
     
     action_type = np.random.choice([0, 1], p=[epsilon, 1-epsilon])
     if action_type == 0 or not(inp):
         #print("DOING RANDOM")
-        action = env.action_space.sample()["P1"]
+        action = env.action_space.sample()
     else:
         frameout1 = imagenet(inp['frames'])
         frameout = timenet(frameout1)
         metaout = metanet(inp['meta'])
         concat_data = torch.cat((frameout, metaout))
-        action = finalnet.predict(concat_data)   #f (observation)   # select best action from output of Q net-work
-        action = np.array([action.item()//8, action.item()%8])
+        action = finalnet.predict(concat_data)   # select one of top-k actions from output of DQN
+        action = action.item() if using_discrete else np.array([action.item()//8, action.item()%8])
         #action = {'move': action//8, 'attack': action%8}
     return action
 
 def LOSS(y, Q):
     return nn.functional.mse_loss(y, Q)
 
-def TRAIN_STEP(REPLAY_MEMORY):
+def TRAIN_STEP(REPLAY_MEMORY, discount_rate, using_discrete = False):
     inds = np.random.choice(len(REPLAY_MEMORY), num_sample, replace=False)
     replay_vals = [REPLAY_MEMORY[ind] for ind in inds]
     y_js = torch.zeros(num_sample)
@@ -178,24 +178,25 @@ def TRAIN_STEP(REPLAY_MEMORY):
         frameout = timenet(frameout1)
         metaout = metanet(replay_vals[i][0]['meta'])
         concat_data = torch.cat((frameout, metaout))
-        ind = replay_vals[i][1][0]*8 + replay_vals[i][1][1]
+        ind = replay_vals[i][1][0]*8 + replay_vals[i][1][1] if not using_discrete else replay_vals[i][1]
         Q_js[i] = finalnet(concat_data)[ind]
     myloss = LOSS(y_js, Q_js)
     myloss.backward()
     optimizer.step()
     #print(finalnet.parameters())
     
+using_discrete = True
 learning_rate = 0.01
 imagenet = ImageNetwork(64)
 timenet = TimeLSTM(64, 16, 32, 1)
 metanet = metaData(32, 16)
-finalnet = finalNetwork(32, 64, 72)
+finalnet = finalNetwork(32, 64, n_actions=16 if using_discrete else 72, using_discrete)
 optimizer = optim.Adam(list(imagenet.parameters()) + list(timenet.parameters()) + list(metanet.parameters()) + list(finalnet.parameters()), learning_rate)
 num_sample = 32
-discount_rate = 0.9
+#discount_rate = 0.5
 rolling_frames = []
 
-def RUN_DQN_ALGORITHM(num_episodes, num_time_steps, eps=1, min_eps=0.05):
+def RUN_DQN_ALGORITHM(results_file, num_episodes, num_time_steps, eps=1, min_eps=0.05, discount_rate=0.6, using_discrete=False):
     """
     Runs through DQN algo. as described in https://www.cs.toronto.edu/~vmnih/docs/dqn.pdf
     
@@ -211,6 +212,7 @@ def RUN_DQN_ALGORITHM(num_episodes, num_time_steps, eps=1, min_eps=0.05):
     ---------
     phi_t (dict): Stores processed observations in the form {'frames': framedata, 'meta': metadata}
     """
+    
     REPLAY_MEMORY = []
     all_cumulative_rewards = []
     for episode in range(num_episodes):
@@ -236,21 +238,21 @@ def RUN_DQN_ALGORITHM(num_episodes, num_time_steps, eps=1, min_eps=0.05):
                 phi_t = preprocess(observation, rolling_frames)
                             
             eps = max(eps*0.995, min_eps)
-            action = SELECT_ACTION(eps, phi_t)
+            action = SELECT_ACTION(eps, phi_t, using_discrete)
             #print("ACTION: ", action, type(action))
-            actions = np.append(action, env.action_space.sample()["P2"])
+            #actions = np.append(action, env.action_space.sample()["P2"])
             
             rolling_frames.append(observation['frame'])
             if (len(rolling_frames) == 6):
                 rolling_frames = rolling_frames[1:]
 
-            observation, reward, done, info = env.step(actions)
+            observation, reward, done, info = env.step(action)
             cumulative_reward[currRound] += reward
             
             if (info['roundDone']):
                 rolling_frames = []
-                print(f"Cumulative Round Reward {cumulative_reward[currRound]}, Average Reward per Step: {cumulative_reward[currRound]/steps}")
-                cumulative_reward[currRound] = np.array(cumulative_reward[currRound])
+                #print(f"Cumulative Round Reward {cumulative_reward[currRound]}, Average Reward per Step: {cumulative_reward[currRound]/steps}")
+                #cumulative_reward[currRound] = np.array(cumulative_reward[currRound])
                 currRound += 1
                 cumulative_reward.append(0)
                 phi_t = None
@@ -261,12 +263,14 @@ def RUN_DQN_ALGORITHM(num_episodes, num_time_steps, eps=1, min_eps=0.05):
                 if (len(REPLAY_MEMORY) == 501):
                     REPLAY_MEMORY = REPLAY_MEMORY[1:]
             if (info['gameDone']):
+                if cumulative_reward[-1] == 0:
+                    cumulative_reward.pop()
                 all_cumulative_rewards.append(cumulative_reward)
                 print(f"EPISODE {episode} DONE")
                 print(cumulative_reward)
                 break
             if (len(REPLAY_MEMORY)>50):
-                TRAIN_STEP(REPLAY_MEMORY)
+                TRAIN_STEP(REPLAY_MEMORY, discount_rate, using_discrete)
             #if steps == 100:
             #    break
     
@@ -277,23 +281,33 @@ def RUN_DQN_ALGORITHM(num_episodes, num_time_steps, eps=1, min_eps=0.05):
         os.mkdir(saved_models_fldr)
     if not os.path.isdir(models_path):
         os.mkdir(models_path)
-    torch.save(imagenet, os.path.join(models_path, f"imagenet_{steps}"))            
-    torch.save(timenet, os.path.join(models_path, f"timenet_{steps}"))            
-    torch.save(metanet, os.path.join(models_path, f"metanet_{steps}"))            
-    torch.save(finalnet, os.path.join(models_path, f"finalnet_{steps}"))       
-    return cumulative_reward
+    torch.save(imagenet, os.path.join(models_path, f"imagenet_{steps}_g={discount_rate}"))            
+    torch.save(timenet, os.path.join(models_path, f"timenet_{steps}_g={discount_rate}"))            
+    torch.save(metanet, os.path.join(models_path, f"metanet_{steps}_g={discount_rate}"))            
+    torch.save(finalnet, os.path.join(models_path, f"finalnet_{steps}_g={discount_rate}"))
+    
+    cumulative_reward = sum(all_cumulative_rewards, [])
+    print(f"CUMULATIVE REWARD:\n{cumulative_reward}")
+    results_file.write(f"Experiment -- gamma={discount_rate}:\n")
+    results_file.write("----------------------\n")
+    results_file.write(f"num_rounds = {len(cumulative_reward)}\n")
+    results_file.write(f"avg_cumulative_rew_per_round = {sum(cumulative_reward)/len(cumulative_reward)}\n")
+    results_file.write(f"{cumulative_reward} \n\n")
+    
+    #results_file = open(f"dqn_results_g={gamma}.txt", "w")
+    #results_file.write(f"Discount Exp -- gamma={discount_rate}: CUMULATIVE REWARD LIST {cumulative_reward} \n AVG CUMULATIVE REWARD PER ROUND {sum(cumulative_reward)/len(cumulative_reward)} \n # Rounds: {len(cumulative_reward)}")
+    #results_file.close()
+        
+    #return sum(all_cumulative_rewards, [])
     
 if __name__ == '__main__':
-    #global REPLAY_MEMORY
-    #REPLAY_MEMORY = []
-    
     settings = {}
     settings["romsPath"] = "/home/nabil/Downloads/"
     settings["gameId"] = "doapp"
-    settings["characters"] = [["Zack"], ["Gen-Fu"]]
-    settings["player"] = "P1P2"
-    #settings["actionSpace"] = "discrete"
-    #settings["attackButCombination"] = False # reduce action space size
+    settings["characters"] = [["Hayabusa"], ["Gen-Fu"]]
+    settings["player"] = "P1"
+    settings["actionSpace"] = "discrete" # reduce action space size to 16 from 72 (multidiscrete w/ comb.)
+    settings["attackButCombination"] = True
 
     envId = "TestEnv"
     env = diambraArena.make(envId, settings)
@@ -301,10 +315,16 @@ if __name__ == '__main__':
     init_observation = env.reset()
     #showGymObs(init_observation, env.charNames) this brings up annoying black screen
     print(env.action_space)
-
-    cumulative_reward = RUN_DQN_ALGORITHM(num_episodes=10, num_time_steps=10, eps=0.8, min_eps=0.05)
-    print(f"CUMULATIVE REWARD {cumulative_reward}")
-    results_file = open("dqn_results.txt", "w")
-    results_file.write(f"CUMULATIVE REWARD LIST {cumulative_reward} \n AVG CUMULATIVE REWARD PER ROUND {sum(cumulative_reward)/len(cumulative_reward)} \n # Rounds: {len(cumulative_reward)}")
+    
+    results_file = open(f"dqn_results.txt", "w")
+    RUN_DQN_ALGORITHM(results_file, num_episodes=10, num_time_steps=10, eps=0.8, min_eps=0.05, discount_rate = 0.3, using_discrete = True)
+    RUN_DQN_ALGORITHM(results_file, num_episodes=10, num_time_steps=10, eps=0.8, min_eps=0.05, discount_rate = 0.6, using_discrete = True)
+    #RUN_DQN_ALGORITHM(results_file, num_episodes=10, num_time_steps=10, eps=0.8, min_eps=0.05, discount_rate = 0.7, using_discrete = True)
+    RUN_DQN_ALGORITHM(results_file, num_episodes=10, num_time_steps=10, eps=0.8, min_eps=0.05, discount_rate = 0.9, using_discrete = True)
     results_file.close()
-    results_file.close()
+    
+    #cumulative_reward = RUN_DQN_ALGORITHM(num_episodes=10, num_time_steps=10, eps=0.8, min_eps=0.05)
+    #print(f"CUMULATIVE REWARD {cumulative_reward}")
+    #results_file = open("dqn_results.txt", "w")
+    #results_file.write(f"CUMULATIVE REWARD LIST {cumulative_reward} \n AVG CUMULATIVE REWARD PER ROUND {sum(cumulative_reward)/len(cumulative_reward)} \n # Rounds: {len(cumulative_reward)}")
+    #results_file.close()
