@@ -3,7 +3,7 @@
 https://user-images.githubusercontent.com/43799733/163399157-c6364d4d-f1b7-4dd3-b248-7752a08c8969.mp4
 
 ECE324 Course Project <br>
-Code for the Deep Q Learning Model can be found in dqn_agent.py. PPO_template.ipynb contains the PPO RL model.
+Code for the Deep Q Learning Model can be found in dqn_agent.py. 
 
 ## Setup
 ```
