@@ -81,7 +81,7 @@ def SELECT_ACTION(epsilon, inp):
     action_type = np.random.choice([0, 1], p=[epsilon, 1-epsilon])
     if action_type == 0:
         #print("DOING RANDOM")
-        action = env.action_space.sample()["P1"]
+        action = env.action_space.sample()#["P1"]
     else:
         metaout = metanet(inp['meta'])
         action = finalnet.predict(metaout)   #f (observation)   # select best action from output of Q net-work
@@ -110,12 +110,12 @@ def TRAIN_STEP(REPLAY_MEMORY):
     myloss.backward()
     optimizer.step()
     
-learning_rate = 1e-4
+learning_rate = 0.01
 metanet = metaData(32, 16)
 finalnet = finalNetwork(16, 64, 72)
 optimizer = optim.Adam(list(metanet.parameters()) + list(finalnet.parameters()), learning_rate)
-num_sample = 64
-discount_rate = 0.9
+num_sample = 32
+discount_rate = 0.6
 rolling_frames = []
 
 def RUN_DQN_ALGORITHM(num_episodes, num_time_steps, eps=1, min_eps=0.05):
@@ -137,7 +137,7 @@ def RUN_DQN_ALGORITHM(num_episodes, num_time_steps, eps=1, min_eps=0.05):
     REPLAY_MEMORY = []
     all_cumulative_rewards = []
     for episode in range(num_episodes):
-        print("REPLAY MEM", len(REPLAY_MEMORY))
+        #print("REPLAY MEM", len(REPLAY_MEMORY))
 
         if episode != 0:
             observation = env.reset()
@@ -159,15 +159,14 @@ def RUN_DQN_ALGORITHM(num_episodes, num_time_steps, eps=1, min_eps=0.05):
             eps = max(eps*0.995, min_eps)
             action = SELECT_ACTION(eps, phi_t)
             #print("ACTION: ", action, type(action))
-            actions = np.append(action, env.action_space.sample()["P2"])
+            #actions = np.append(action, env.action_space.sample()["P2"])
 
-            observation, reward, done, info = env.step(actions)
+            observation, reward, done, info = env.step(action)
             cumulative_reward[currRound] += reward
-            #round_rewards += reward
             
             if (info['roundDone']):
                 print(f"Cumulative Round Reward {cumulative_reward[currRound]}, Average Reward per Step: {cumulative_reward[currRound]/steps}")
-                cumulative_reward[currRound] = np.array(cumulative_reward[currRound])
+                #cumulative_reward[currRound] = np.array(cumulative_reward[currRound])
                 currRound += 1
                 cumulative_reward.append(0)
                 phi_t = None
@@ -178,23 +177,24 @@ def RUN_DQN_ALGORITHM(num_episodes, num_time_steps, eps=1, min_eps=0.05):
                 if (len(REPLAY_MEMORY) == 501):
                     REPLAY_MEMORY = REPLAY_MEMORY[1:]
             if (info['gameDone']):
+                if cumulative_reward[-1] == 0:
+                    cumulative_reward.pop()
                 all_cumulative_rewards.append(cumulative_reward)
                 print(f"EPISODE {episode} DONE")
                 break
-            if (len(REPLAY_MEMORY)>80):
+            if (len(REPLAY_MEMORY)>50):
                 TRAIN_STEP(REPLAY_MEMORY)
-            #if steps == 100:
-            #    break
     
-    """
+    
     saved_models_fldr = os.path.join(os.getcwd(), 'saved_models')
     models_path = os.path.join(saved_models_fldr, f'{steps}')
     if not os.path.isdir(saved_models_fldr):
         os.mkdir(saved_models_fldr)
-    os.mkdir(models_path)
-    torch.save(metanet, os.path.join(models_path, f"metanet_{steps}"))            
-    torch.save(finalnet, os.path.join(models_path, f"finalnet_{steps}"))   
-    """         
+    if not os.path.isdir(models_path):
+        os.mkdir(models_path)
+    torch.save(metanet, os.path.join(models_path, f"ablation_metanet_{steps}"))            
+    torch.save(finalnet, os.path.join(models_path, f"ablation_finalnet_{steps}"))   
+            
     return sum(all_cumulative_rewards, [])
     
 if __name__ == '__main__':
@@ -204,8 +204,9 @@ if __name__ == '__main__':
     settings = {}
     settings["romsPath"] = "/home/nabil/Downloads/"
     settings["gameId"] = "doapp"
-    settings["characters"] = [["Bayman"], ["Gen-Fu"]]
-    settings["player"] = "P1P2"
+    settings["characters"] = [["Hayabusa"], ["Gen-Fu"]]
+    settings["player"] = "P1"#P2"
+    
     #settings["actionSpace"] = "discrete"
     #settings["attackButCombination"] = False # reduce action space size
 
@@ -216,7 +217,7 @@ if __name__ == '__main__':
     #showGymObs(init_observation, env.charNames) this brings up annoying black screen
     print(env.action_space)
 
-    cumulative_reward = RUN_DQN_ALGORITHM(num_episodes=15, num_time_steps=10, eps=0.8, min_eps=0.05)
+    cumulative_reward = RUN_DQN_ALGORITHM(num_episodes=10, num_time_steps=10, eps=0.8, min_eps=0.05)
     print(f"CUMULATIVE REWARD {cumulative_reward}")
     results_file = open("dqn_results.txt", "w")
     results_file.write(f"CUMULATIVE REWARD LIST {cumulative_reward} \n AVG CUMULATIVE REWARD PER ROUND {sum(cumulative_reward)/len(cumulative_reward)} \n # Rounds: {len(cumulative_reward)}")
