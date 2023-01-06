@@ -29,4 +29,4 @@ Contains files for agents that we run in the diambra environment. The two most i
 
 **models/meta_ablation.py**: Runs DQL with out metanet model (a subset of the original model) and writes experimental results (same as for dqn_agent.py) to a file in the current working directory. The requirements for running this are the same as for dqn_agent.py
 
-**models/test_agent.py**: Runs an agent that randomly samples actions from the diambra environment action space at every time step. This file also prints out information about environment state at every timestep. To run this, you need to make the same change to a line of code as shown above for dqn_agent.py
+**models/test_agent.py**: Runs an agent that randomly samples actions from the diambra environment action space at every time step. This file also prints out information about environment state at every timestep. To run this, you need to make the same change to a line of code as shown above for the dqn_agent.py file.
